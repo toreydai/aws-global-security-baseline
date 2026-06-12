@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Regional security services for AWS account security baseline.
+
+Parameters:
+  IncludeGlobalResourceTypes:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set to true only in the home Region used for global IAM resource recording.
+  CreateGuardDutyDetector:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set to false if GuardDuty is already enabled in this Region.
+  CreateSecurityHub:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set to false if Security Hub is already enabled in this Region.
+  CreateAccessAnalyzer:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set to false if the account-external-access analyzer already exists in this Region.
+
+Conditions:
+  RecordGlobalResources: !Equals [!Ref IncludeGlobalResourceTypes, 'true']
+  ShouldCreateGuardDutyDetector: !Equals [!Ref CreateGuardDutyDetector, 'true']
+  ShouldCreateSecurityHub: !Equals [!Ref CreateSecurityHub, 'true']
+  ShouldCreateAccessAnalyzer: !Equals [!Ref CreateAccessAnalyzer, 'true']
+
+Resources:
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: glacier-after-90-days
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSConfigBucketPermissionsCheck
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ConfigBucket.Arn
+          - Sid: AWSConfigBucketExistenceCheck
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:ListBucket
+            Resource: !GetAtt ConfigBucket.Arn
+          - Sid: AWSConfigBucketDelivery
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ConfigBucket.Arn
+              - !Sub '${ConfigBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  ConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWS_ConfigRole
+
+  ConfigurationRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      Name: default
+      RoleARN: !GetAtt ConfigRole.Arn
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: !If [RecordGlobalResources, true, false]
+
+  ConfigDeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    DependsOn:
+      - ConfigBucketPolicy
+    Properties:
+      Name: default
+      S3BucketName: !Ref ConfigBucket
+
+  S3PublicReadRule:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigurationRecorder
+    Properties:
+      ConfigRuleName: s3-bucket-public-read-prohibited
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_PUBLIC_READ_PROHIBITED
+
+  S3PublicWriteRule:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigurationRecorder
+    Properties:
+      ConfigRuleName: s3-bucket-public-write-prohibited
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_PUBLIC_WRITE_PROHIBITED
+
+  AccessAnalyzer:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Condition: ShouldCreateAccessAnalyzer
+    Properties:
+      AnalyzerName: account-external-access
+      Type: ACCOUNT
+
+  GuardDutyDetector:
+    Type: AWS::GuardDuty::Detector
+    Condition: ShouldCreateGuardDutyDetector
+    Properties:
+      Enable: true
+      FindingPublishingFrequency: FIFTEEN_MINUTES
+
+  SecurityHub:
+    Type: AWS::SecurityHub::Hub
+    Condition: ShouldCreateSecurityHub
+    Properties:
+      EnableDefaultStandards: false
+
+  SecurityHubFsbpStandard:
+    Type: AWS::SecurityHub::Standard
+    Condition: ShouldCreateSecurityHub
+    DependsOn: SecurityHub
+    Properties:
+      StandardsArn: !Sub 'arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/aws-foundational-security-best-practices/v/1.0.0'
+
+Outputs:
+  ConfigBucketName:
+    Value: !Ref ConfigBucket
+  GuardDutyDetectorId:
+    Condition: ShouldCreateGuardDutyDetector
+    Value: !Ref GuardDutyDetector
+  AccessAnalyzerArn:
+    Condition: ShouldCreateAccessAnalyzer
+    Value: !GetAtt AccessAnalyzer.Arn
