@@ -34,7 +34,7 @@ bash scripts/deploy.sh
 2. 删除或确认不存在 root access key
 3. 启用 IAM Identity Center，日常操作不使用 root 或长期 IAM 用户
 
-## 文件说明
+## 目录结构
 
 ```
 cloudformation/
@@ -44,8 +44,9 @@ scripts/
   deploy.sh                       # 部署主基线
   enable-regional-services.sh     # 扩展到额外 Region
 docs/
+  architecture.md                 # 架构图与整体拓扑
   design.md                       # 架构与设计决策
-  test-manual.md                  # 验证与测试手册
+  testing.md                  # 验证与测试文档
   runbook.md                      # 告警响应与运维操作
   troubleshooting.md              # 常见问题排障
 ```
@@ -63,12 +64,13 @@ aws cloudformation delete-stack \
   --region "${AWS_REGION:-us-east-1}"
 ```
 
-详细清理步骤（含账号级密码策略和 PAB 回滚）见 [docs/test-manual.md](docs/test-manual.md)。
+详细清理步骤（含账号级密码策略和 PAB 回滚）见 [docs/testing.md](docs/testing.md)。
 
 ## 参考文档
 
+- [架构文档](docs/architecture.md)
 - [设计文档](docs/design.md)
-- [测试手册](docs/test-manual.md)
+- [测试文档](docs/testing.md)
 - [Runbook（告警响应）](docs/runbook.md)
 - [排障手册](docs/troubleshooting.md)
 - [AWS Well-Architected Security Pillar](https://docs.aws.amazon.com/wellarchitected/latest/framework/security.html)
